@@ -1,92 +1,165 @@
-prompt used to create this project
+# NowX
 
-As a senior software developer 
+Reliable, fragmented messaging over **ESP-NOW** for ESP32.
 
+NowX wraps the raw ~250-byte ESP-NOW frame with:
 
-Who specializes in ESP32 using Arduino IDE,
+- **Fragmentation & reassembly** of arbitrary-size messages (up to `NX_MAX_BYTES`, default 60 KB).
+- **Windowed ACKs with retries** for delivery reliability.
+- **CRC32** integrity check per fragment.
+- **Optional XOR obfuscation** of payloads (see security note below).
+- A **host-testable protocol core** (`NxProtocol`) decoupled from Arduino/ESP-IDF, so the bulk of the logic runs under Unity on your laptop.
 
-Build a library that is a wrapper around ESP-NOW that supports sending any length of message. Sending large files should be possible and efficient. 
+> ⚠️ **Security note:** `NX_OBFUSCATE` (formerly `NX_ENCRYPT`) is XOR with a repeating key. It is **not** cryptography. Use it to discourage casual sniffing only. For real confidentiality, configure ESP-NOW's built-in LMK/PMK or layer AES-GCM on top.
 
-create software with concise variable and function names
+---
 
-Each message sent should include a json header with:
+## Install
 
--magic string REQ
--destination host name 
-‐client mac address
--sequential message number
--blocks total number
--block number
+### PlatformIO
 
-Followed by the raw data from the sender.
+```ini
+[env:esp32dev]
+platform = espressif32
+board = esp32dev
+framework = arduino
+lib_deps = file:///path/to/nowx ; or a git URL
+```
 
+### Arduino IDE
 
-For example:
+Copy this folder into `~/Arduino/libraries/NowX/`.
 
-{REQ,test.com,ad:fe:de:ee:99:de,2,1,1}data
+---
 
+## Quick start
 
-Include buffering if message is too long to fit in a ESP-NOW message.
+### Receiver
 
+```cpp
+#include <NowX.h>
 
-The result message object should include methods for extracting the header values and the data
+NowX now("rx");
 
+void setup() {
+  Serial.begin(115200);
+  now.begin();
+}
 
-Reply to each message with an ACK json that includes:
+void loop() {
+  Message m;
+  if (now.receive(m)) {
+    Serial.printf("got %u bytes: %s\n", m.len(), m.str().c_str());
+    m.release(); // hand the reassembly buffer back to the pool
+  }
+}
+```
 
--magic string ACK
--server mac address 
--sequential message number
--server timestamp unsigned long 
+### Sender
 
-Eg 
-{ACK,ad:fe:de:ee:99:de,1,177993006}
+```cpp
+#include <NowX.h>
 
+NowX now("tx");
 
+void setup() {
+  Serial.begin(115200);
+  now.begin();
+  now.setPeer("AA:BB:CC:DD:EE:FF");
+}
 
-Clients automatically sweep standard 2.4GHz Wi-Fi channels (1-11) until they receive an instant ACK (acknowledgment) from the server, preventing packet loss if the router assigns the server a new channel.
+void loop() {
+  now.send(String("hello"));
+  delay(1000);
+}
+```
 
+See `examples/` for `Sender`, `Receiver`, and `Encrypted` sketches.
 
+---
 
-Send returns true if it was sent and ACK'd
+## Wire format
 
+All multi-byte fields are little-endian (ESP32 native).
 
-Handle any failed messages gracefully 
+```
+NxHdr (17 bytes, packed):
+  uint32_t magic = 0x4E585031 ('NXP1')
+  uint32_t msg   monotonically increasing message id
+  uint16_t blk   block index within this message
+  uint16_t total total blocks in this message
+  uint16_t len   payload length in this frame (<= NX_PAY)
+  uint8_t  flags NX_ACK | NX_OBFUSCATE | ...
+  uint32_t crc   CRC32 of on-wire payload bytes
 
+Followed by `len` payload bytes (possibly obfuscated).
 
-Make a very easy to use api 
+NxAck (16 bytes, packed):
+  uint32_t msg   message being acked
+  uint32_t base  window base block index this ack covers
+  uint32_t map   bitmap of received blocks within this window
+  uint32_t ts    sender timestamp (informational)
+```
 
-Client:
-send("my message");
+CRC is computed on the **on-wire** bytes, so a receiver validates CRC before any deobfuscation.
 
-Server:
-Message msg = receive();
-String reply = msg.data;
+---
 
+## Sliding-window ACK
 
+```
+sender                          receiver
+  | --- blk 0..NX_WIN-1 --->  |
+  |                            | store, ack(map, base=0)
+  | <-------- NxAck base=0 -- |
+  |
+  | --- blk NX_WIN..2*NX_WIN-1 --> |
+  |                                 | store, ack(map, base=NX_WIN)
+  | <----- NxAck base=NX_WIN ----- |
+  ...
+```
 
+If an ACK does not arrive within `NX_TIMEOUT` ms, the window is retransmitted up to `NX_RETRY` times.
 
+---
 
+## Configuration
 
-Sync the client ESP32 RTC using the timestamp from server ACK.
+| Macro          | Default  | Meaning                                |
+|----------------|----------|----------------------------------------|
+| `NX_PAY`       | 240      | Bytes of payload per fragment          |
+| `NX_WIN`       | 16       | Fragments per ACK window               |
+| `NX_POOL`      | 64       | Segment buffer pool size               |
+| `NX_MSG`       | 8        | Concurrent reassembly slots            |
+| `NX_TIMEOUT`   | 300 ms   | Per-window ACK timeout                 |
+| `NX_RETRY`     | 5        | Retries per window                     |
+| `NX_MAX_BLOCKS`| 256      | Max blocks per message (≈60 KB)        |
+| `NX_RX_QUEUE`  | 8        | Receive queue depth                    |
+| `NX_DEDUP`     | 16       | Per-peer recent-msg dedup history      |
+| `NX_ASM_TTL`   | 5000 ms  | Reassembly slot timeout (GC)           |
 
+---
 
-Add clean Serial logging to help with debugging. 
-Create a common wrapper around Serial.printf and Serial.println
-logf()
-logln()
+## Testing
 
-All log lines start with prefix: hhmmss 
-Eq
-010301 log_message
+Host-side unit tests run under PlatformIO's `native` environment using Unity:
 
+```bash
+pio test -e native
+```
 
+The protocol core (`NxProtocol`) takes a transport interface; tests use an in-memory `LoopbackTransport` to exercise fragmentation, reassembly, ACK loss, retries, encryption round-trip, and duplicate suppression — all without flashing hardware.
 
-   output a zip file with all the files.
+---
 
+## Known limitations
 
+- No flow control between concurrent senders to the same receiver.
+- `NX_OBFUSCATE` is not cryptography.
+- Max message size is `NX_MAX_BLOCKS * NX_PAY` (default ≈ 60 KB).
 
-Include unit tests to test all the functionality
+---
 
+## License
 
-
+MIT — see `LICENSE`.
