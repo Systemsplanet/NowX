@@ -10,7 +10,7 @@ NowX wraps the raw ~250-byte ESP-NOW frame with:
 - **Optional XOR obfuscation** of payloads (see security note below).
 - A **host-testable protocol core** (`NxProtocol`) decoupled from Arduino/ESP-IDF, so the bulk of the logic runs under Unity on your laptop.
 
-> ⚠️ **Security note:** `NX_OBFUSCATE` (formerly `NX_ENCRYPT`) is XOR with a repeating key. It is **not** cryptography. Use it to discourage casual sniffing only. For real confidentiality, configure ESP-NOW's built-in LMK/PMK or layer AES-GCM on top.
+> ⚠️ **Security note:** `NX_OBFUSCATE` is XOR with a repeating key. It is **not** cryptography. Use it to discourage casual sniffing only. For real confidentiality, configure ESP-NOW's built-in LMK/PMK or layer AES-GCM on top.
 
 ---
 
