@@ -1,6 +1,6 @@
 #include <unity.h>
 #include "NxProtocol.h"
-#include "LoopbackTransport.h"
+#include "NxLoopback.h"
 #include <vector>
 #include <cstring>
 
@@ -25,15 +25,15 @@ static void roundtrip(size_t size) {
   TEST_ASSERT_TRUE(pb.receive(m));
   TEST_ASSERT_EQUAL_UINT32((uint32_t)size, m.len());
   TEST_ASSERT_EQUAL_INT8_ARRAY(payload.data(), m.data(), size);
-  m.release();
+  // Message released automatically by destructor.
 }
 
-static void frag_single_block()  { roundtrip(10); }
-static void frag_exact_block()   { roundtrip(NX_PAY); }
-static void frag_block_plus_one(){ roundtrip(NX_PAY + 1); }
-static void frag_full_window()   { roundtrip(NX_PAY * NX_WIN); }
-static void frag_two_windows()   { roundtrip(NX_PAY * (NX_WIN + 3)); }
-static void frag_large()         { roundtrip(NX_PAY * 50); }
+static void frag_single_block()   { roundtrip(10); }
+static void frag_exact_block()    { roundtrip(NX_PAY); }
+static void frag_block_plus_one() { roundtrip(NX_PAY + 1); }
+static void frag_full_window()    { roundtrip(NX_PAY * NX_WIN); }
+static void frag_two_windows()    { roundtrip(NX_PAY * (NX_WIN + 3)); }
+static void frag_large()          { roundtrip(NX_PAY * 50); }
 
 void run_fragmentation_tests() {
   RUN_TEST(frag_single_block);
