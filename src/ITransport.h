@@ -1,7 +1,7 @@
 #pragma once
 
 // ITransport - abstract send/recv used by NxProtocol.
-// EspNowTransport wraps ESP-NOW; LoopbackTransport (in tests) wraps memory.
+// EspNowTransport wraps ESP-NOW; NxLoopback (in tests) wraps memory.
 
 #include <stdint.h>
 #include <stddef.h>
@@ -22,13 +22,13 @@ namespace nowx {
                       const uint8_t *data,
                       size_t len) = 0;
 
-    // Register receive callback. Called from arbitrary context.
+    // Register receive callback. Called from arbitrary context (ISR/task).
     virtual void onRecv(RecvFn fn) = 0;
 
     // Monotonic milliseconds.
     virtual uint32_t millis() = 0;
 
-    // Cooperative yield (sleep ~1ms).
+    // Cooperative yield (~1 ms).
     virtual void yieldMs(uint32_t ms) = 0;
   };
 }
