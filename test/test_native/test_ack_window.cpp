@@ -1,6 +1,6 @@
 #include <unity.h>
 #include "NxProtocol.h"
-#include "LoopbackTransport.h"
+#include "NxLoopback.h"
 #include <vector>
 #include <cstdlib>
 
@@ -26,7 +26,6 @@ static void ack_multiwindow_succeeds() {
   TEST_ASSERT_TRUE(pb.receive(m));
   TEST_ASSERT_EQUAL_UINT32((uint32_t)sz, m.len());
   TEST_ASSERT_EQUAL_INT8_ARRAY(payload.data(), m.data(), sz);
-  m.release();
 }
 
 static void ack_recovers_from_loss() {
@@ -45,15 +44,12 @@ static void ack_recovers_from_loss() {
   std::vector<uint8_t> payload(1000);
   for (size_t i = 0; i < payload.size(); i++) payload[i] = (uint8_t)i;
 
-  bool ok = pa.send(payload.data(), (uint32_t)payload.size());
-  for (int attempt = 0; attempt < 5 && !ok; attempt++)
-    ok = pa.send(payload.data(), (uint32_t)payload.size());
-  TEST_ASSERT_TRUE(ok);
+  // The retry logic inside send() should recover without external retries.
+  TEST_ASSERT_TRUE(pa.send(payload.data(), (uint32_t)payload.size()));
 
   Message m;
   TEST_ASSERT_TRUE(pb.receive(m));
   TEST_ASSERT_EQUAL_INT8_ARRAY(payload.data(), m.data(), payload.size());
-  m.release();
 }
 
 void run_ack_window_tests() {
