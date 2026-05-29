@@ -1,5 +1,5 @@
-// Demonstrates NX_OBFUSCATE.
-// WARNING: This is XOR, not cryptography. See README.
+// Demonstrates NX_OBFUSCATE (XOR key).
+// WARNING: XOR is NOT cryptography. See README security note.
 
 #include <NowX.h>
 
@@ -18,6 +18,7 @@ void setup() {
 }
 
 void loop() {
-  now.send(String("secretish payload"), NX_OBFUSCATE);
+  bool ok = now.send(String("secretish payload"), NX_OBFUSCATE);
+  Serial.printf("send -> %s\n", ok ? "ok" : "FAIL");
   delay(2000);
 }
