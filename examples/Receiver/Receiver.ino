@@ -1,4 +1,5 @@
 #include <NowX.h>
+#include <WiFi.h>
 
 NowX now("rx");
 
@@ -20,7 +21,7 @@ void loop() {
                   (unsigned)m.id(), (unsigned)m.len());
     Serial.write(m.data(), m.len());
     Serial.println();
-    m.release();
+    // m.release() is called automatically when m goes out of scope.
   }
   delay(5);
 }
