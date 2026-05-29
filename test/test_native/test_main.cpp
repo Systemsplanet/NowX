@@ -1,6 +1,6 @@
 #include <unity.h>
 
-void setUp(void) {}
+void setUp(void)    {}
 void tearDown(void) {}
 
 void run_crc_tests();
@@ -12,6 +12,8 @@ void run_ack_window_tests();
 void run_encryption_roundtrip_tests();
 void run_message_str_tests();
 void run_logger_tests();
+void run_gc_timeout_tests();
+void run_rxq_full_tests();
 
 int main(int, char**) {
   UNITY_BEGIN();
@@ -24,5 +26,7 @@ int main(int, char**) {
   run_encryption_roundtrip_tests();
   run_message_str_tests();
   run_logger_tests();
+  run_gc_timeout_tests();
+  run_rxq_full_tests();
   return UNITY_END();
 }
