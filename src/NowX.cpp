@@ -19,7 +19,9 @@ namespace nowx {
     _t.addPeer(m);
   }
 
-  void NowX::setKey(const uint8_t *key, uint32_t len) { _p.setKey(key, len); }
+  void NowX::setKey(const uint8_t *key, uint32_t len) {
+    _p.setKey(key, len);
+  }
 
   bool NowX::send(const uint8_t *d, uint32_t len, uint8_t flags) {
     return _p.send(d, len, flags);
@@ -31,5 +33,6 @@ namespace nowx {
   }
 
   bool NowX::receive(Message &m) { return _p.receive(m); }
-}
-#endif
+
+} // namespace nowx
+#endif // !NOWX_HOST_BUILD
