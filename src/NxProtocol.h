@@ -1,79 +1,127 @@
 #pragma once
 
-// NxProtocol - pure protocol logic, no Arduino / ESP-IDF dependencies.
-// Used by NowX (production) and by host-side Unity tests via LoopbackTransport.
+// NxProtocol - pure protocol logic; no Arduino / ESP-IDF dependencies.
+// Used by NowX (production) and by host-side Unity tests via NxLoopback.
 
 #include "ITransport.h"
 #include <stdint.h>
 #include <stddef.h>
 #include <string>
 
+// ---- Compile-time tunables -------------------------------------------
+// Override any of these before including NxProtocol.h.
+#ifndef NX_PAY
+  static_assert(true); // just guard the block
+  #define NX_PAY       240   // payload bytes per fragment
+#endif
+#ifndef NX_WIN
+  #define NX_WIN        16   // fragments per ACK window (max 32)
+#endif
+#ifndef NX_POOL
+  #define NX_POOL      128   // total fragment buffer slots (>= NX_MSG * NX_WIN)
+#endif
+#ifndef NX_MSG
+  #define NX_MSG         8   // concurrent reassembly slots
+#endif
+#ifndef NX_TIMEOUT_MS
+  #define NX_TIMEOUT_MS 300  // per-window ACK wait (ms)
+#endif
+#ifndef NX_RETRY
+  #define NX_RETRY       5   // retransmit attempts per window
+#endif
+#ifndef NX_MAX_BLOCKS
+  #define NX_MAX_BLOCKS 256  // max fragments per message (~60 KB)
+#endif
+#ifndef NX_RXQ
+  #define NX_RXQ         8   // receive queue depth (power of two)
+#endif
+#ifndef NX_DUP
+  #define NX_DUP        16   // per-peer dedup history depth
+#endif
+#ifndef NX_TTL
+  #define NX_TTL      5000   // stale reassembly slot timeout (ms)
+#endif
+
+// ---- Sanity checks ---------------------------------------------------
+static_assert(NX_WIN  <= 32,
+  "NX_WIN must be <= 32: the ACK bitmap is uint32_t");
+static_assert(NX_POOL >= NX_MSG * NX_WIN,
+  "NX_POOL must be >= NX_MSG * NX_WIN to avoid starvation");
+static_assert((NX_RXQ & (NX_RXQ - 1)) == 0,
+  "NX_RXQ must be a power of two");
+static_assert(__BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__,
+  "NowX wire format requires a little-endian target");
+
 namespace nowx {
 
-  // ---- Tunables ---------------------------------------------------------
-  static constexpr uint32_t NX_MAGIC = 0x4E585031UL; // 'NXP1'
-  static constexpr uint16_t NX_PAY = 240;
-  static constexpr uint16_t NX_WIN = 16;
-  static constexpr uint16_t NX_POOL = 64;
-  static constexpr uint8_t NX_MSG = 8;
-  static constexpr uint32_t NX_TIMEOUT_MS = 300;
-  static constexpr uint8_t NX_RETRY = 5;
-  static constexpr uint16_t NX_MAX_BLOCKS = 256;
-  static constexpr uint8_t NX_RX_QUEUE = 8; // power of two
-  static constexpr uint8_t NX_DEDUP = 16;
-  static constexpr uint32_t NX_ASM_TTL_MS = 5000;
-
-  static constexpr size_t NX_MAX_BYTES =
+  // ---- Constants -------------------------------------------------------
+  static constexpr uint32_t NX_MAGIC   = 0x4E585031UL; // 'NXP1'
+  static constexpr size_t   NX_MAX_BYTES =
       (size_t)NX_MAX_BLOCKS * (size_t)NX_PAY;
 
+  // ---- Packet flags ----------------------------------------------------
   enum : uint8_t {
     NX_ACK       = 1 << 0,
     NX_OBFUSCATE = 1 << 1,
     NX_COMPRESS  = 1 << 2, // reserved
     NX_STREAM    = 1 << 3, // reserved
-    NX_PRIO      = 1 << 4  // reserved
+    NX_PRIO      = 1 << 4, // reserved
+    NX_IS_ACK    = 1 << 7  // set in standalone ACK packets (no NxHdr magic)
   };
 
+  // ---- Wire structs ----------------------------------------------------
+  // All multi-byte fields are little-endian (ESP32 native).
   #pragma pack(push, 1)
   struct NxHdr {
-    uint32_t magic;
-    uint32_t msg;
-    uint16_t blk;
-    uint16_t total;
-    uint16_t len;
-    uint8_t  flags;
-    uint32_t crc; // CRC32 of on-wire payload bytes
+    uint32_t magic; // NX_MAGIC
+    uint32_t msg;   // monotonically increasing message id
+    uint16_t idx;   // fragment index within this message
+    uint16_t cnt;   // total fragment count
+    uint16_t pay;   // payload bytes in this frame (<= NX_PAY)
+    uint8_t  flags; // NX_OBFUSCATE | ...
+    uint32_t crc;   // CRC32 of on-wire payload bytes
   };
   struct NxAck {
-    uint32_t msg;
-    uint32_t base;
-    uint32_t map;
-    uint32_t ts;
-  };
+    uint8_t  type;  // NX_IS_ACK — distinguishes ACK frames from data
+    uint32_t msg;   // message being acked
+    uint32_t base;  // window base fragment index
+    uint32_t ack;   // bitmap of received fragments within this window
+    uint32_t t;     // sender timestamp (informational, ms)
+  } __attribute__((packed));
   #pragma pack(pop)
 
   static_assert(sizeof(NxHdr) == 4+4+2+2+2+1+4, "NxHdr layout");
-  static_assert(sizeof(NxAck) == 16, "NxAck layout");
+  static_assert(sizeof(NxAck) == 1+4+4+4+4,      "NxAck layout");
 
-  // ---- Public message handle -------------------------------------------
+  // ---- Public message handle ------------------------------------------
   class NxProtocol;
 
   class Message {
   public:
     Message() = default;
 
-    uint8_t  *data() const { return _ptr; }
-    uint32_t  len()  const { return _len; }
-    bool obfuscated() const { return (_flags & NX_OBFUSCATE) != 0; }
-    uint32_t  id()   const { return _msg; }
+    // Automatically releases the buffer on destruction.
+    ~Message() { release(); }
 
-    // Safe even for non-NUL-terminated payloads.
+    // Non-copyable; move is fine.
+    Message(const Message&)            = delete;
+    Message& operator=(const Message&) = delete;
+    Message(Message&& o) noexcept;
+    Message& operator=(Message&& o) noexcept;
+
+    uint8_t  *data()       const { return _ptr; }
+    uint32_t  len()        const { return _len; }
+    uint32_t  id()         const { return _msg; }
+    bool      obfuscated() const { return (_flags & NX_OBFUSCATE) != 0; }
+
+    // Safe for payloads with embedded NUL bytes.
     std::string str() const;
 
-    // Hand the reassembly buffer back to the pool. Idempotent.
+    // Return the reassembly buffer to the pool. Idempotent.
+    // Normally called automatically by the destructor.
     void release();
 
-    // Used internally by NxProtocol::receive().
+    // Internal — called by NxProtocol::receive().
     void _bind(NxProtocol *p, uint8_t *ptr, uint32_t len,
                uint8_t flags, uint32_t msg, int slot);
 
@@ -86,58 +134,70 @@ namespace nowx {
     uint32_t    _msg   = 0;
   };
 
-  // ---- Protocol engine --------------------------------------------------
+  // ---- Protocol engine ------------------------------------------------
   class NxProtocol {
   public:
     explicit NxProtocol(ITransport *t);
 
     // Configure the (single) peer this protocol talks to.
     void setPeer(const uint8_t mac[6]);
-    // "AA:BB:CC:DD:EE:FF" - returns false on parse error.
-    bool setPeerStr(const char *s);
+    bool setPeerStr(const char *s); // "AA:BB:CC:DD:EE:FF"; false on error
 
     // Set an XOR obfuscation key. Pass nullptr/0 to disable.
-    // NOTE: This is *not* cryptography. See README.
+    // NOTE: XOR is NOT cryptography — see README.
     void setKey(const uint8_t *key, uint32_t len);
 
-    // Send raw bytes; returns true on full delivery (all windows ACKed).
+    // Send bytes. Returns true when all windows are ACKed.
+    // May block for up to NX_TIMEOUT_MS * NX_RETRY * numWindows ms.
     bool send(const uint8_t *data, uint32_t len, uint8_t flags = 0);
-    bool send(const std::string &s, uint8_t flags = 0);
+    bool send(const std::string &s,              uint8_t flags = 0);
 
     // Pop one fully-reassembled message, if available.
     bool receive(Message &out);
 
-    // ---- Pure functions exposed for testing ---------------------------
+    // ---- Pure helpers exposed for testing ----------------------------
     static uint32_t crc32(const uint8_t *d, uint32_t len);
-    static bool parseMac(const char *s, uint8_t mac[6]);
-    void xorInPlace(uint8_t *d, uint32_t len) const;
+    static bool     parseMac(const char *s, uint8_t mac[6]);
+    void            xorInPlace(uint8_t *d, uint32_t len) const;
 
-    // ---- Called by Message::release() ---------------------------------
+    // ---- Called by Message -------------------------------------------
     void _releaseSlot(int slot);
 
-    // ---- Called by transport (public so the binding shim can reach) ---
+    // ---- Called by transport (public for the binding shim) -----------
     void _onPacket(const uint8_t mac[6], const uint8_t *d, size_t len);
 
-    // ---- Test hooks ---------------------------------------------------
-    bool hasObfuscation() const { return _enc; }
+    // ---- Test hooks --------------------------------------------------
+    bool hasObfuscation() const { return _obf; }
 
   private:
-    struct Seg {
+    // ----- TX state ---------------------------------------------------
+    struct TxState {
+      uint8_t  peer[6]{};
+      bool     peerSet = false;
+      uint32_t msgCtr  = 0;
+    } _tx;
+
+    // ----- RX reassembly state ----------------------------------------
+    // Frag: one fragment-sized buffer from the pool.
+    struct Frag {
       bool    used;
       uint16_t len;
       uint8_t  data[NX_PAY];
     };
-    struct Asm {
+    // RxAsm: one in-flight reassembly slot.
+    struct RxAsm {
       bool     used;
       uint32_t msg;
       uint8_t  srcMac[6];
-      uint16_t total;
-      uint16_t got;
+      uint16_t cnt;    // expected fragment count
+      uint16_t got;    // received so far
       uint32_t lastMs;
-      Seg     *seg[NX_MAX_BLOCKS];
-      uint32_t winMap[(NX_MAX_BLOCKS + 31) / 32];
+      Frag    *frag[NX_MAX_BLOCKS];
+      // Note: frag[i] != nullptr is the authoritative "received" test;
+      //       no separate bitmap needed.
     };
-    struct RxSlot {
+    // RxMsg: a fully-reassembled message waiting for the caller.
+    struct RxMsg {
       bool     used;
       uint8_t  buf[NX_MAX_BYTES];
       uint32_t len;
@@ -149,41 +209,47 @@ namespace nowx {
       uint32_t msg;
     };
 
-    ITransport *_t;
-    uint8_t     _peer[6]{};
-    bool        _peerSet = false;
-
-    uint8_t _key[32]{};
-    bool    _enc = false;
-
-    uint32_t _msgCtr = 0;
-
-    Seg     _pool[NX_POOL]{};
-    Asm     _asm[NX_MSG]{};
-
-    volatile bool _ackPending = false;
+    // ----- ACK signalling (shared between TX task and RX callback) ----
+    // Guarded by _ackLock on-device; plain variables on host.
+#ifdef NOWX_HOST_BUILD
+    bool   _ackReady = false;
+    NxAck  _lastAck{};
+#else
+    volatile bool _ackReady = false;
     NxAck         _lastAck{};
+    portMUX_TYPE  _ackLock = portMUX_INITIALIZER_UNLOCKED;
+#endif
 
-    RxSlot           _rxSlots[NX_RX_QUEUE]{};
-    uint8_t          _rxQueue[NX_RX_QUEUE]{};
-    volatile uint8_t _rh = 0;
-    volatile uint8_t _rt = 0;
+    // ----- Obfuscation ------------------------------------------------
+    uint8_t _key[32]{};
+    bool    _obf = false;
 
-    DedupEntry _dedup[NX_DEDUP]{};
+    // ----- Pools & queues ---------------------------------------------
+    ITransport *_t;
+
+    Frag  _pool[NX_POOL]{};
+    RxAsm _asm[NX_MSG]{};
+
+    RxMsg            _rxSlots[NX_RXQ]{};
+    uint8_t          _rxQueue[NX_RXQ]{};
+    volatile uint8_t _rxH = 0; // producer writes here
+    volatile uint8_t _rxT = 0; // consumer reads here
+
+    DedupEntry _dedup[NX_DUP]{};
     uint8_t    _dedupHead = 0;
 
-    // ---- internals ----
-    Seg  *_alloc();
-    void  _free(Seg *s);
-    Asm  *_asmGet(uint32_t msg, const uint8_t mac[6]);
-    void  _asmGc();
-    int   _rxAlloc();
-    bool  _isDuplicate(const uint8_t mac[6], uint32_t msg);
-    void  _markSeen(const uint8_t mac[6], uint32_t msg);
+    // ----- Internals --------------------------------------------------
+    Frag  *_allocFrag();
+    void   _freeFrag(Frag *f);
+    RxAsm *_asmGet(uint32_t msg, const uint8_t mac[6]);
+    void   _asmGc();
+    int    _rxAlloc();
+    bool   _isDup(const uint8_t mac[6], uint32_t msg);
+    void   _markSeen(const uint8_t mac[6], uint32_t msg);
 
     bool _sendRaw(const uint8_t *d, uint32_t len);
-    bool _waitAck(uint32_t msg, uint32_t base, uint32_t expectedMap);
-    void _sendAck(uint32_t msg, uint32_t base, uint32_t map,
+    bool _waitAck(uint32_t msg, uint32_t base, uint32_t expected);
+    void _sendAck(uint32_t msg, uint32_t base, uint32_t ackMap,
                   const uint8_t mac[6]);
 
     void _handleAck(const uint8_t *d, size_t len);
