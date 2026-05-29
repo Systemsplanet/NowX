@@ -9,7 +9,7 @@ void setup() {
     Serial.println("ESP-NOW init failed");
     while (true) delay(1000);
   }
-  // Replace with your receiver's MAC.
+  // Replace with your receiver's MAC address.
   now.setPeer("AA:BB:CC:DD:EE:FF");
 }
 
