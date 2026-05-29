@@ -5,12 +5,12 @@
 #ifdef NOWX_HOST_BUILD
 namespace nowx_host {
   static uint32_t (*g_millis_fn)() = nullptr;
-  static FILE *g_stream = nullptr;
+  static FILE     *g_stream        = nullptr;
 
-  void set_millis(uint32_t (*fn)()) { g_millis_fn = fn; }
-  uint32_t millis() { return g_millis_fn ? g_millis_fn() : 0; }
-  void set_log_stream(FILE *f) { g_stream = f; }
-  FILE *log_stream() { return g_stream ? g_stream : stderr; }
+  void     set_millis(uint32_t (*fn)()) { g_millis_fn = fn; }
+  uint32_t millis()                     { return g_millis_fn ? g_millis_fn() : 0; }
+  void     set_log_stream(FILE *f)      { g_stream = f; }
+  FILE    *log_stream()                 { return g_stream ? g_stream : stderr; }
 }
 #endif
 
@@ -21,17 +21,13 @@ namespace nowx {
   void setLogStream(Stream *s) { g_stream = s; }
 #endif
 
-  void formatTimestamp(char *b, size_t n, uint32_t millis_now) {
-    if (n < 7) {
-      if (n) b[0] = '\0';
-      return;
-    }
-    uint32_t t = millis_now / 1000u;
-    uint8_t h = (uint8_t)((t / 3600u) % 24u);
-    uint8_t m = (uint8_t)((t / 60u) % 60u);
-    uint8_t s = (uint8_t)(t % 60u);
-    snprintf(b, n, "%02u%02u%02u",
-             (unsigned)h, (unsigned)m, (unsigned)s);
+  void formatTimestamp(char *b, size_t n, uint32_t ms_now) {
+    if (n < 7) { if (n) b[0] = '\0'; return; }
+    uint32_t t = ms_now / 1000u;
+    uint8_t  h = (uint8_t)((t / 3600u) % 24u);
+    uint8_t  m = (uint8_t)((t /   60u) % 60u);
+    uint8_t  s = (uint8_t)( t          % 60u);
+    snprintf(b, n, "%02u%02u%02u", (unsigned)h, (unsigned)m, (unsigned)s);
   }
 
   static uint32_t now_ms() {
@@ -62,14 +58,12 @@ namespace nowx {
   void logf(const char *fmt, ...) {
     char ts[8];
     formatTimestamp(ts, sizeof(ts), now_ms());
-
     char buf[256];
     va_list a;
     va_start(a, fmt);
-    int written = vsnprintf(buf, sizeof(buf), fmt, a);
+    vsnprintf(buf, sizeof(buf), fmt, a);
     va_end(a);
-    (void)written;
-
     write_line(ts, buf);
   }
-}
+
+} // namespace nowx
