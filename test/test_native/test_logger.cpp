@@ -39,11 +39,11 @@ static void logf_writes_to_stream() {
 
   nowx::logf("hello %d", 42);
   fflush(f);
-
   rewind(f);
+
   char buf[64] = {0};
   size_t n = fread(buf, 1, sizeof(buf) - 1, f);
-  buf[n] = 0;
+  buf[n] = '\0';
   fclose(f);
   nowx_host::set_log_stream(nullptr);
 
