@@ -10,11 +10,19 @@
 
 namespace nowx {
 
+  // EspNowTransport - wraps ESP-NOW for the ESP32 Arduino framework.
+  //
+  // Only one instance should exist per device; the ESP-NOW receive
+  // callback is registered once in begin() and stored in a module-level
+  // pointer.  If you need a second logical channel, use a second ESP32.
   class EspNowTransport : public ITransport {
   public:
     EspNowTransport();
+
+    // Initialise WiFi station mode and ESP-NOW.  Call once in setup().
     bool begin();
 
+    // Register a unicast peer. Safe to call multiple times for the same MAC.
     bool addPeer(const uint8_t mac[6]);
 
     // ITransport
@@ -24,11 +32,13 @@ namespace nowx {
     void     yieldMs(uint32_t ms) override;
 
   private:
-    static EspNowTransport *_me;
+    // Module-level singleton pointer — only one transport at a time.
+    // A second construction overwrites this and logs a warning.
+    static EspNowTransport *_inst;
     RecvFn _cb;
 
-    static void _rxTrampoline(const esp_now_recv_info_t *i,
-                              const uint8_t *d, int len);
+    static void _rxCb(const esp_now_recv_info_t *info,
+                      const uint8_t *d, int len);
   };
 }
-#endif
+#endif // !NOWX_HOST_BUILD
