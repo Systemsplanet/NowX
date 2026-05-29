@@ -1,6 +1,6 @@
 #include <unity.h>
 #include "NxProtocol.h"
-#include "LoopbackTransport.h"
+#include "NxLoopback.h"
 #include <vector>
 #include <cstring>
 
@@ -31,7 +31,7 @@ static void obfuscation_roundtrip() {
   TEST_ASSERT_EQUAL_UINT32((uint32_t)payload.size(), m.len());
   TEST_ASSERT_TRUE(m.obfuscated());
   TEST_ASSERT_EQUAL_INT8_ARRAY(payload.data(), m.data(), payload.size());
-  m.release();
+  // m released by destructor
 }
 
 void run_encryption_roundtrip_tests() {
